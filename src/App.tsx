@@ -34,11 +34,13 @@ import {
   Zap,
 } from 'lucide-react'
 import { GameCanvas } from './components/GameCanvas'
+import { MatchCanvas, type MatchResult } from './components/MatchCanvas'
 import { playSound } from './game/audio'
 import { getLevel, levels, type Level } from './game/levels'
+import { RIVALS, type Rival } from './game/scenarios'
 
 const SAVE_KEY = 'futebolista-kick-save-v2'
-type Screen = 'home' | 'journey' | 'locker' | 'missions' | 'game'
+type Screen = 'home' | 'journey' | 'locker' | 'missions' | 'game' | 'match'
 type LockerTab = 'players' | 'balls'
 
 interface SaveData {
@@ -49,6 +51,8 @@ interface SaveData {
   highScores: Record<number, number>
   totalGoals: number
   totalCoins: number
+  matchesPlayed: number
+  matchWins: number
   equippedSkin: string
   equippedBall: string
   ownedSkins: string[]
@@ -69,6 +73,8 @@ const defaultSave: SaveData = {
   highScores: {},
   totalGoals: 0,
   totalCoins: 0,
+  matchesPlayed: 0,
+  matchWins: 0,
   equippedSkin: 'aurora',
   equippedBall: 'classic',
   ownedSkins: ['aurora'],
@@ -149,6 +155,10 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [isDailyGame, setIsDailyGame] = useState(false)
+  const [rivalPickerOpen, setRivalPickerOpen] = useState(false)
+  const [matchRival, setMatchRival] = useState<Rival | null>(null)
+  const [matchKey, setMatchKey] = useState(0)
+  const [matchResult, setMatchResult] = useState<null | (MatchResult & { reward: number; unlocked: string[]; draw: boolean })>(null)
 
   const totalStars = useMemo(() => Object.values(save.stars).reduce((sum, value) => sum + value, 0), [save.stars])
   const completedLevels = Object.keys(save.stars).filter((key) => save.stars[Number(key)] > 0).length
@@ -209,6 +219,37 @@ export default function App() {
     setGameResult({ ...result, reward })
   }
 
+  const startMatch = (rival: Rival) => {
+    playSound('tap', save.sound)
+    setMatchRival(rival)
+    setMatchResult(null)
+    setMatchKey((value) => value + 1)
+    setScreen('match')
+  }
+
+  const handleMatchComplete = (result: MatchResult) => {
+    const rival = matchRival ?? RIVALS[0]
+    const draw = result.userGoals === result.rivalGoals
+    const reward = Math.round(
+      70 + result.userGoals * 45 + result.coinsCollected * 10 + (result.won ? rival.winReward : draw ? rival.winReward * 0.35 : 0),
+    )
+    const previousWins = save.matchWins
+    const newWins = previousWins + (result.won ? 1 : 0)
+    const unlocked = RIVALS.filter((r) => r.unlockWins > previousWins && r.unlockWins <= newWins)
+    setSave((current) => ({
+      ...current,
+      coins: current.coins + reward,
+      totalGoals: current.totalGoals + result.userGoals,
+      totalCoins: current.totalCoins + result.coinsCollected,
+      matchesPlayed: current.matchesPlayed + 1,
+      matchWins: newWins,
+    }))
+    setMatchResult({ ...result, reward, unlocked: unlocked.map((r) => r.name), draw })
+    if (unlocked.length > 0) {
+      setToast(`Novo rival desbloqueado: ${unlocked.map((r) => r.name).join(', ')}!`)
+    }
+  }
+
   const claimDaily = () => {
     setSave((current) => ({ ...current, coins: current.coins + 150, dailyDate: todayKey() }))
     playSound('coin', save.sound)
@@ -263,6 +304,8 @@ export default function App() {
     { id: 'collector', icon: Coins, title: 'Caça-moedas', text: 'Colete 10 moedas no campo', current: save.totalCoins, target: 10, reward: 180 },
     { id: 'triple', icon: Star, title: 'Olho no lance', text: 'Conquiste 9 estrelas', current: totalStars, target: 9, reward: 220 },
     { id: 'journey_6', icon: Compass, title: 'Na estrada', text: 'Complete 6 fases', current: completedLevels, target: 6, reward: 300 },
+    { id: 'match_3', icon: Trophy, title: 'Dono do estádio', text: 'Jogue 3 partidas', current: save.matchesPlayed, target: 3, reward: 200 },
+    { id: 'win_2', icon: Crown, title: 'Sequência vencedora', text: 'Vença 2 partidas', current: save.matchWins, target: 2, reward: 350 },
     { id: 'legend', icon: Crown, title: 'Futebolista lendário', text: 'Marque 12 gols', current: save.totalGoals, target: 12, reward: 450 },
   ]
 
@@ -271,6 +314,47 @@ export default function App() {
     setSave((current) => ({ ...current, coins: current.coins + reward, claimedMissions: [...current.claimedMissions, id] }))
     playSound('coin', save.sound)
     setToast(`Missão concluída: +${reward} moedas`)
+  }
+
+  if (screen === 'match' && matchRival) {
+    return (
+      <main className={`game-screen match-screen ${save.lowMotion ? 'reduce-motion' : ''}`}>
+        <header className="game-topbar">
+          <button className="back-button" onClick={() => { setScreen('home'); setMatchResult(null) }}><ArrowLeft size={19} /><span>Abandonar partida</span></button>
+          <div className="game-brand"><span className="brand-mark"><Zap size={17} fill="currentColor" /></span><strong>FUTEBOLISTA</strong><em>KICK</em></div>
+          <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Configurações"><Settings size={20} /></button>
+        </header>
+        <MatchCanvas
+          key={matchKey}
+          rival={matchRival}
+          kitColor={selectedSkin.color}
+          ballStyle={save.equippedBall}
+          sound={save.sound}
+          haptics={save.haptics}
+          onMatchComplete={handleMatchComplete}
+        />
+        {settingsOpen && renderSettings()}
+        {matchResult && (
+          <Modal className={`result-modal match-result ${matchResult.won ? 'win' : matchResult.draw ? 'draw' : 'lose'}`}>
+            <div className="result-burst">{matchResult.won ? <Trophy size={46} /> : matchResult.draw ? <Medal size={42} /> : <RotateCcw size={42} />}</div>
+            <span className="result-kicker">FIM DE JOGO</span>
+            <h2>{matchResult.won ? 'Vitória no estádio!' : matchResult.draw ? 'Empate apertado' : 'O rival levou esta'}</h2>
+            <p className="match-final-score">FUTEBOLISTA <strong>{matchResult.userGoals}</strong> x <strong>{matchResult.rivalGoals}</strong> {matchRival.short}</p>
+            <div className="result-stats">
+              <span><small>GOLS SEUS</small><strong>{matchResult.userGoals}</strong></span>
+              <span><small>PRÊMIO</small><strong><Coins size={16} /> {matchResult.reward}</strong></span>
+            </div>
+            {matchResult.unlocked.length > 0 && (
+              <div className="unlocked-rivals"><Sparkles size={16} /><span>Novo rival: <strong>{matchResult.unlocked.join(', ')}</strong></span></div>
+            )}
+            <div className="result-actions">
+              <button className="secondary-button" onClick={() => { setMatchResult(null); setScreen('home') }}>Sair</button>
+              <button className="primary-button" onClick={() => startMatch(matchRival)}>Revanche <ArrowRight size={18} /></button>
+            </div>
+          </Modal>
+        )}
+      </main>
+    )
   }
 
   if (screen === 'game') {
@@ -384,7 +468,7 @@ export default function App() {
               <div className="dashboard-grid">
                 <section className="hero-card">
                   <div className="hero-shade" />
-                  <div className="hero-content"><span className="live-badge"><i /> CAMPANHA PRINCIPAL</span><h2>Desenhe.<br /><em>Curve.</em> Marque.</h2><p>Enfrente defesas inteligentes em arenas cada vez mais imprevisíveis.</p><div className="hero-meta"><span><Compass size={17} /> Fase {save.unlockedLevel} de {levels.length}</span><span><Star size={17} fill="currentColor" /> {totalStars} estrelas</span></div><div className="hero-actions"><button className="play-button" onClick={() => startLevel(getLevel(save.unlockedLevel))}><Play size={20} fill="currentColor" /> JOGAR AGORA</button><button className="glass-button" onClick={() => goTo('journey')}>Ver mapa <ChevronRight size={18} /></button></div></div>
+                  <div className="hero-content"><span className="live-badge"><i /> PARTIDA RÁPIDA</span><h2>Desenhe.<br /><em>Curve.</em> Marque.</h2><p>Faltas, escanteios e pênaltis em momentos aleatórios — como uma partida de verdade, em estádios cheios.</p><div className="hero-meta"><span><Trophy size={17} /> {save.matchWins} vitórias</span><span><Compass size={17} /> {save.matchesPlayed} partidas</span></div><div className="hero-actions"><button className="play-button" onClick={() => setRivalPickerOpen(true)}><Play size={20} fill="currentColor" /> JOGAR AGORA</button><button className="glass-button" onClick={() => goTo('journey')}>Jornada de fases <ChevronRight size={18} /></button></div></div>
                   <div className="hero-progress"><span>PROGRESSO DA TEMPORADA</span><i><b style={{ width: `${Math.min(100, (totalStars / 36) * 100)}%` }} /></i><strong>{Math.round((totalStars / 36) * 100)}%</strong></div>
                 </section>
                 <section className="daily-card">
@@ -458,6 +542,28 @@ export default function App() {
       {spinOpen && (
         <Modal onClose={() => !spinning && setSpinOpen(false)} className="spin-modal">
           <span className="modal-eyebrow">PRÊMIO DIÁRIO</span><h2>Giro da sorte</h2><p>Um prêmio garantido a cada dia.</p><div className="wheel-pointer" /><div className={`prize-wheel ${spinning ? 'spinning' : ''}`}><span>60</span><span>100</span><span>250</span><span>80</span><span>180</span><span>120</span><i><Zap size={24} fill="currentColor" /></i></div>{spinPrize && <div className="spin-winner"><Sparkles size={18} /> Você ganhou <strong>{spinPrize}!</strong></div>}<button className="primary-button wide" disabled={save.spinDate === todayKey() || spinning} onClick={spinWheel}>{spinning ? 'GIRANDO...' : save.spinDate === todayKey() ? 'VOLTE AMANHÃ' : 'GIRAR AGORA'}</button>
+        </Modal>
+      )}
+      {rivalPickerOpen && (
+        <Modal onClose={() => setRivalPickerOpen(false)} className="rival-modal">
+          <div className="modal-icon"><Trophy size={24} /></div>
+          <span className="modal-eyebrow">PARTIDA RÁPIDA</span>
+          <h2>Escolha o rival</h2>
+          <p className="modal-subtitle">Faltas, escanteios, pênaltis e mais — tudo aleatório, como uma partida de verdade. Vença para liberar rivais mais fortes.</p>
+          <div className="rival-list">
+            {RIVALS.map((rival) => {
+              const locked = save.matchWins < rival.unlockWins
+              const dots = 1 + Math.round(rival.keeperSkill * 4)
+              return (
+                <button key={rival.id} className={`rival-row ${locked ? 'locked' : ''}`} onClick={() => { if (!locked) { setRivalPickerOpen(false); startMatch(rival) } }}>
+                  <span className="rival-badge" style={{ background: rival.kit, color: '#0a1c22' }}>{rival.short}</span>
+                  <span className="rival-copy"><strong>{rival.name}</strong><small>{rival.tier}</small></span>
+                  <span className="rival-diff">{[1, 2, 3, 4, 5].map((n) => <i key={n} className={n <= dots ? 'on' : ''} />)}</span>
+                  {locked ? <span className="rival-lock"><Lock size={14} /> {rival.unlockWins} vit.</span> : <ChevronRight size={18} />}
+                </button>
+              )
+            })}
+          </div>
         </Modal>
       )}
       {settingsOpen && renderSettings()}
