@@ -1,11 +1,11 @@
 {
-  "name": "Futebolista Kick",
-  "short_name": "FKick",
-  "description": "Desenhe chutes impossíveis e vire uma lenda do futebol.",
+  "name": "Solar System 3D — Simulador Realista",
+  "short_name": "Solar 3D",
+  "description": "Simulador 3D do Sistema Solar com órbitas keplerianas reais.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#071824",
-  "theme_color": "#071824",
+  "background_color": "#04060d",
+  "theme_color": "#04060d",
   "orientation": "any",
-  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
 }
