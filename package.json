@@ -1,5 +1,5 @@
 {
-  "name": "futebolista-kick-v2",
+  "name": "solar-system-3d",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -10,11 +10,13 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "latest",
     "lucide-react": "latest",
-    "vite": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "three": "^0.185.1",
+    "vite": "latest"
   },
   "devDependencies": {
     "@types/react": "latest",
