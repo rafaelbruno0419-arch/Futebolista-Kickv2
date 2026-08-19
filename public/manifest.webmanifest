@@ -1,11 +1,17 @@
 {
-  "name": "Solar System 3D — Simulador Realista",
-  "short_name": "Solar 3D",
-  "description": "Simulador 3D do Sistema Solar com órbitas keplerianas reais.",
+  "name": "OnionSearch — Deep web via Tor",
+  "short_name": "OnionSearch",
+  "description": "Interface web para buscas anônimas na deep web via Tor, rodando no Termux.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#04060d",
-  "theme_color": "#04060d",
-  "orientation": "any",
-  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+  "background_color": "#0b0e14",
+  "theme_color": "#0b0e14",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
 }
