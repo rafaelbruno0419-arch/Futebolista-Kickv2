@@ -1,0 +1,16 @@
+# Exemplo de torrc para o Termux.
+# Copie para $PREFIX/etc/tor/torrc (no Termux) e reinicie o Tor.
+#
+#   cp scripts/torrc.example $PREFIX/etc/tor/torrc
+
+# Porta SOCKS usada pelo OnionSearch (obrigatória)
+SocksPort 9050
+
+# Permite o botão "Nova identidade" (SIGNAL NEWNYM).
+# Gere a senha com:  tor --hash-password sua_senha
+# e defina TOR_CONTROL_PASSWORD=sua_senha no servidor.
+ControlPort 9051
+# HashedControlPassword 16:XXXXXXXX...   (opcional; cole o hash aqui)
+
+# Evita vazar tráfego caso o app erre a configuração (recomendado)
+SocksPolicy accept 127.0.0.1

@@ -1,92 +1,176 @@
-# Solar System 3D — Simulador Realista do Sistema Solar
+# 🧅 OnionSearch — Busca na deep web via Tor (Termux)
 
-Simulador 3D do Sistema Solar em tempo real, direto no navegador. Órbitas calculadas
-com mecânica kepleriana a partir de elementos orbitais reais (J2000), planetas
-renderizados com shaders procedurais e eclipses geometricamente corretos.
+Interface web para fazer buscas anônimas roteando **todo o tráfego pelo Tor**.
+O servidor foi feito para rodar dentro do **Termux** no seu celular Android: o
+Termux executa o daemon do Tor e este app Node.js, e você acessa a interface
+pelo navegador (do próprio celular ou de outro aparelho na mesma rede Wi-Fi).
 
-![Saturno](https://img.shields.io/badge/three.js-WebGL-000?logo=three.js) ![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite) ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript)
+![Node.js](https://img.shields.io/badge/Node.js-20%2B-2cb67d?logo=node.js)
+![Tor](https://img.shields.io/badge/Tor-SOCKS5-7f5af0)
+![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite)
+![React](https://img.shields.io/badge/React-18-61dafb?logo=react)
 
-## O que tem de real
-
-| Item | Fonte / precisão |
-| --- | --- |
-| Elementos orbitais | *JPL Approximate Positions of the Major Planets* (J2000) |
-| Equação de Kepler | Newton-Raphson, tolerância 1e-10 |
-| Distância Terra–Sol | 1,012 UA em agosto (afélio em julho) ✔ |
-| Velocidade orbital | Terra 29,45 km/s · Mercúrio 48,6 · Netuno 5,47 ✔ |
-| Órbita da Lua | 363.348 – 405.501 km (real: 356.500 – 406.700) ✔ |
-| Cometa Halley | periélio 0,587 UA · afélio 35,1 UA (real: 0,586 / 35,1) ✔ |
-| Rotação e obliquidade | Períodos reais, incluindo rotação retrógrada de Vênus e Urano |
-| Eclipses | Umbra/penumbra por raio angular do ocultador vs. do Sol |
+> **O que este projeto é — e o que não é.** "Deep web" é toda a parte da
+> internet que não aparece em buscadores comuns (sites atrás de login, bancos
+> de dados, intranets…). O Tor te dá **anonimato** e acesso a serviços `.onion`
+> (a chamada "dark web"). Nenhuma ferramenta "busca a deep web inteira": este
+> app faz (1) **busca anônima na web indexada** (DuckDuckGo) e (2) **busca em
+> serviços `.onion`** (Ahmia), além de (3) **abrir páginas `.onion`** pelo Tor.
+> Use com responsabilidade: anonimato ≠ licença para atividades ilegais, e
+> este projeto não se destina a isso.
 
 ## Recursos
 
-- **22 corpos**: Sol, 8 planetas, Plutão, 11 luas e o cometa Halley.
-- **Superfícies procedurais** — sem texturas externas, tudo gerado em GLSL:
-  - Terra com continentes, vegetação por latitude, calotas, nuvens em movimento,
-    reflexo especular no oceano e luzes de cidades no lado noturno;
-  - Júpiter e Saturno com bandas por *domain warping*, Grande Mancha Vermelha
-    e ovais brancos;
-  - Marte com regiões de albedo escuro, cânions e calotas sazonais;
-  - mundos rochosos com campos de crateras (Worley) e relevo por normal mapping;
-  - luas geladas com fraturas (Europa, Encélado, Tritão).
-- **Anéis de Saturno** com divisão de Cassini, estrutura fina e sombra do planeta
-  projetada sobre eles.
-- **Cometa** com coma que infla perto do Sol, cauda de íons (azul, reta) e de
-  poeira (amarela, encurvada), ambas apontando para longe do Sol.
-- **Céu real**: 14.000 estrelas com cores por temperatura (lei de Planck) e a
-  faixa da Via Láctea inclinada 60° em relação à eclíptica.
-- **Escalas**: de "escala real" (onde os planetas somem no vazio, como na
-  realidade) até 60× de ampliação.
-- **Controle de tempo**: de tempo real a 10 anos por segundo, para frente e para trás.
-
-## Controles
-
-| Ação | Como |
+| Recurso | O que faz |
 | --- | --- |
-| Orbitar | arrastar |
-| Zoom | rolagem ou pinça |
-| Focar um corpo | clicar nele ou no chip lateral |
-| Pausar | `Espaço` |
-| Acelerar / desacelerar | `.` e `,` |
-| Órbitas / rótulos / escala real | `O` · `L` · `R` |
-| Modo foto (esconder UI) | `H` |
+| **Status do Tor** | Mostra se o Tor está conectado, o IP do nó de saída e a latência |
+| **Nova identidade** | Troca o circuito do Tor (`SIGNAL NEWNYM`) para mudar de IP |
+| **DuckDuckGo anônimo** | Busca na web indexada sem rastreamento, via Tor |
+| **Ahmia `.onion`** | Busca em serviços ocultos da rede Tor (índice curado, seguro) |
+| **Abrir `.onion`** | Baixa e exibe páginas `.onion` direto na interface, via Tor |
+| **Proteção opcional** | `AUTH_TOKEN` para proteger a API/proxy |
+
+## Como funciona
+
+```
+Seu navegador ──► servidor Node.js (Termux) ──► proxy SOCKS5 ──► rede Tor ──► destino
+   (localhost)      server/index.js            socks5h:9050
+```
+
+Toda requisição sai pelo SocksPort do Tor (`127.0.0.1:9050`). O proxy usa
+`socks5h`, então a resolução de DNS acontece **dentro** do Tor — requisito
+obrigatório para funcionar com endereços `.onion`.
+
+## Instalação no Termux (Android)
+
+```bash
+# 1) Instale os pacotes
+pkg update && pkg upgrade
+pkg install tor nodejs-lts git
+
+# 2) Clone o projeto
+git clone https://github.com/rafaelbruno0419-arch/Futebolista-Kickv2.git
+cd Futebolista-Kickv2
+
+# 3) Configure o Tor (cria $PREFIX/etc/tor/torrc se não existir)
+cp scripts/torrc.example $PREFIX/etc/tor/torrc
+
+# 4) Instale as dependências e compile a interface
+npm install
+npm run build
+```
+
+Ou faça tudo de uma vez com o script:
+
+```bash
+bash scripts/termux-setup.sh
+```
 
 ## Rodando
 
 ```bash
-npm install
-npm run dev      # http://localhost:5173
-npm run build    # gera dist/
+# Terminal 1 — inicia o Tor
+tor
+
+# Terminal 2 — inicia o app
+npm start
 ```
 
-## Arquitetura
+Abra no navegador do celular:
+
+- **No próprio celular:** `http://localhost:3000`
+- **De outro aparelho na mesma rede Wi-Fi:** `http://IP_DO_CELULAR:3000`
+  (descubra o IP com `ip -4 addr`)
+
+### Botão "Nova identidade" (opcional)
+
+Para o botão funcionar, o `torrc` precisa de `ControlPort 9051`:
+
+```bash
+# gere a senha e veja o hash
+tor --hash-password minha_senha
+
+# edite $PREFIX/etc/tor/torrc
+#   ControlPort 9051
+#   HashedControlPassword <hash-gerado-acima>
+
+# depois informe a senha ao servidor:
+TOR_CONTROL_PASSWORD=minha_senha npm start
+```
+
+## Variáveis de ambiente
+
+Todas têm padrão sensato (veja `.env.example`):
+
+| Variável | Padrão | Descrição |
+| --- | --- | --- |
+| `PORT` | `3000` | Porta do servidor web |
+| `HOST` | `0.0.0.0` | Interface (use `127.0.0.1` para só acesso local) |
+| `TOR_PROXY_HOST` | `127.0.0.1` | Endereço do SocksPort do Tor |
+| `TOR_PROXY_PORT` | `9050` | Porta SOCKS do Tor |
+| `TOR_CONTROL_HOST` | `127.0.0.1` | Endereço do ControlPort |
+| `TOR_CONTROL_PORT` | `9051` | Porta de controle do Tor |
+| `TOR_CONTROL_PASSWORD` | *(vazio)* | Senha do ControlPort |
+| `AUTH_TOKEN` | *(vazio)* | Token de acesso opcional para a API |
+
+Exemplo:
+
+```bash
+AUTH_TOKEN=segredo PORT=8080 npm start
+```
+
+> **Atenção com a rede.** Com `HOST=0.0.0.0`, qualquer aparelho na sua rede
+> Wi-Fi acessa o app (e, por ele, o Tor). Em rede que você não controla, use
+> `HOST=127.0.0.1` e/ou defina `AUTH_TOKEN`.
+
+## Desenvolvimento
+
+```bash
+npm run dev      # frontend com hot reload em http://localhost:5173
+npm run server   # servidor (API) em http://localhost:3000
+```
+
+Durante o `dev`, o Vite repassa `/api` para o servidor Node
+(`VITE_API_TARGET`, padrão `http://127.0.0.1:3000`).
+
+```bash
+npm run build    # compila a interface para dist/
+npm run typecheck
+```
+
+## Estrutura
 
 ```
+server/
+  index.js   servidor Express (API + frontend estático)
+  tor.js     proxy SOCKS5 do Tor, status, novo circuito (NEWNYM)
+  search.js  motores de busca: DuckDuckGo (web) e Ahmia (.onion)
+  onion.js   visualizador de páginas .onion (rewrite de links via proxy)
+  util.js    helpers de parsing/escaping de HTML
 src/
-  sim/
-    data.ts      elementos orbitais, físicos e parâmetros de shader dos 22 corpos
-    kepler.ts    equação de Kepler, posições e traçado de órbitas
-    shaders.ts   GLSL: superfícies, atmosferas, anéis, coroa solar
-    stars.ts     campo estelar e Via Láctea
-    engine.ts    cena three.js, câmera, LOD, eclipses, laço de render
-  App.tsx        interface (React)
+  App.tsx    interface React
+  api.ts     cliente HTTP (configurável para outro host)
+  types.ts   tipos compartilhados
+  styles.css tema escuro
+scripts/
+  termux-setup.sh   instalação guiada no Termux
+  torrc.example     configuração de exemplo do Tor
 ```
 
-Detalhes de implementação que importam:
+## Limitações conhecidas
 
-- **Profundidade logarítmica** — a cena vai de metros a dezenas de UA; sem isso,
-  o z-buffer colapsa.
-- **Céu em cena separada** — renderizado antes, com o depth limpo em seguida, para
-  que estrelas nunca vazem através dos planetas.
-- **Câmera travada no alvo** — segue a posição exata do corpo e só interpola o
-  *resíduo* da troca de foco; interpolar o alvo faria a câmera ficar para trás
-  de um planeta a 29 km/s.
-- **LOD por tamanho aparente** — crateras finas e normal mapping só entram quando
-  o corpo ocupa área relevante da tela.
-- **Billboards para brilho** — o halo do Sol é um quad que encara a câmera, então
-  não há como "entrar dentro" da esfera de brilho.
+- O DuckDuckGo pode pedir CAPTCHA para alguns nós de saída do Tor — use
+  **Nova identidade** e tente de novo.
+- O visualizador `.onion` é uma navegação **simplificada**: sites com muito
+  JavaScript, formulários complexos ou streaming podem não funcionar. Para uso
+  completo, use o [Tor Browser](https://www.torproject.org/download/).
+- O Ahmia filtra conteúdos abusivos por política própria — é um índice curado.
 
-## Deploy
+## Privacidade
 
-Projeto Vite estático; `vercel.json` já faz o rewrite de SPA e o cache dos assets.
+- O app **não** salva histórico, cookies ou consultas. Tudo acontece em memória.
+- Nenhuma dependência de terceiros recebe seus dados: as requisições saem
+  direto do seu aparelho, pelo Tor.
+- Ainda assim, **não entre com contas pessoais** em sites `.onion` e lembre-se
+  de que o anonimato do Tor depende do seu comportamento (não de uma única
+  ferramenta).

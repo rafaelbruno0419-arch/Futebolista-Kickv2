@@ -1,405 +1,632 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { SolarEngine, type Marker, AUW } from './sim/engine'
-import { BODIES, BODY_MAP, AU, KM } from './sim/data'
-import { daysSinceJ2000 } from './sim/kepler'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ExternalLink,
+  Globe,
+  Link2,
+  Loader2,
+  Lock,
+  RefreshCw,
+  Search,
+  Settings,
+  ShieldAlert,
+  ShieldCheck,
+  X,
+} from 'lucide-react'
+import {
+  fetchNewNym,
+  fetchSearch,
+  fetchStatus,
+  getBase,
+  getToken,
+  proxyHref,
+  setBase,
+  setToken,
+} from './api'
+import type {
+  EngineOption,
+  SearchEngine,
+  SearchResult,
+  SearchResponse,
+  TorStatus,
+} from './types'
 
-const TIME_STEPS = [
-  { label: '−1 ano/s', v: -365 },
-  { label: '−1 mês/s', v: -30 },
-  { label: '−1 dia/s', v: -1 },
-  { label: 'Tempo real', v: 1 / 86400 },
-  { label: '1 h/s', v: 1 / 24 },
-  { label: '1 dia/s', v: 1 },
-  { label: '1 semana/s', v: 7 },
-  { label: '1 mês/s', v: 30 },
-  { label: '1 ano/s', v: 365 },
-  { label: '10 anos/s', v: 3650 },
+const ENGINES: EngineOption[] = [
+  {
+    id: 'duckduckgo',
+    label: 'DuckDuckGo',
+    hint: 'Busca anônima na web indexada, sem rastreamento.',
+    badge: 'web anônima',
+  },
+  {
+    id: 'ahmia',
+    label: 'Ahmia',
+    hint: 'Índice curado de serviços .onion (rede Tor).',
+    badge: '.onion',
+  },
 ]
 
-function fmtDist(km: number) {
-  if (km >= AU * 0.05) return `${(km / AU).toLocaleString('pt-BR', { maximumFractionDigits: 3 })} UA`
-  if (km >= 1e6) return `${(km / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} milhões de km`
-  return `${Math.round(km).toLocaleString('pt-BR')} km`
-}
-
-const KIND_PRIORITY: Record<string, number> = { star: 0, planet: 1, dwarf: 2, comet: 3, moon: 4 }
-
-/**
- * Evita rótulos sobrepostos: percorre do mais importante (estrela/planeta, e o
- * focado) para o menos, descartando quem cai perto demais de um já aceito.
- */
-function declutter(markers: Marker[]): Marker[] {
-  const vis = markers.filter((m) => m.visible)
-  vis.sort((a, b) => {
-    if (a.focused !== b.focused) return a.focused ? -1 : 1
-    const pk = KIND_PRIORITY[a.kind] - KIND_PRIORITY[b.kind]
-    if (pk !== 0) return pk
-    return a.dist - b.dist
-  })
-  const kept: Marker[] = []
-  for (const m of vis) {
-    const minX = m.kind === 'moon' ? 78 : 96
-    const minY = 17
-    let clash = false
-    for (const k of kept) {
-      if (Math.abs(k.x - m.x) < minX && Math.abs(k.y - m.y) < minY) {
-        clash = true
-        break
-      }
-    }
-    if (!clash) kept.push(m)
-  }
-  // desenha os distantes primeiro para que os próximos fiquem por cima
-  return kept.sort((a, b) => b.dist - a.dist)
-}
-
-const KIND_LABEL: Record<string, string> = {
-  star: 'Estrela',
-  planet: 'Planeta',
-  moon: 'Lua',
-  dwarf: 'Planeta anão',
-  comet: 'Cometa',
+function OnionMark({ size = 28 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      fill="none"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id="onionBody" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#c084fc" />
+          <stop offset="1" stopColor="#7f5af0" />
+        </linearGradient>
+        <linearGradient id="onionGold" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="#f4a261" />
+          <stop offset="1" stopColor="#e76f51" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="16" fill="#0b0e14" />
+      <circle cx="32" cy="32" r="24" fill="url(#onionBody)" />
+      <path
+        d="M32 20c0 0 8 8 8 14a8 8 0 1 1-16 0c0-6 8-14 8-14Z"
+        fill="#0b0e14"
+        fillOpacity="0.35"
+      />
+      <ellipse cx="32" cy="34" rx="6" ry="8" fill="url(#onionGold)" />
+      <path
+        d="M14 18c-2 4-2 8 0 12M50 18c2 4 2 8 0 12"
+        stroke="#2cb67d"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
 }
 
 export default function App() {
-  const mountRef = useRef<HTMLDivElement>(null)
-  const engineRef = useRef<SolarEngine | null>(null)
-  const [markers, setMarkers] = useState<Marker[]>([])
-  const [focus, setFocus] = useState('earth')
-  const [selected, setSelected] = useState<string | null>('earth')
-  const [date, setDate] = useState(new Date())
-  const [fps, setFps] = useState(60)
-  const [paused, setPaused] = useState(false)
-  const [speedIdx, setSpeedIdx] = useState(5)
-  const [planetScale, setPlanetScale] = useState(1)
-  const [realScale, setRealScale] = useState(false)
-  const [showOrbits, setShowOrbits] = useState(true)
-  const [showLabels, setShowLabels] = useState(true)
-  const isCompact = () => typeof window !== 'undefined' && (window.innerWidth <= 860 || window.innerHeight <= 560)
-  const [compact, setCompact] = useState(isCompact)
-  const [uiHidden, setUiHidden] = useState(false) // modo foto (botão / tecla H)
-  const [listOpen, setListOpen] = useState(!isCompact())
-  const [infoOpen, setInfoOpen] = useState(!isCompact())
-  const [booted, setBooted] = useState(false)
-  const [dist, setDist] = useState(0)
-  const [speedKmS, setSpeedKmS] = useState(0)
-  const [sunDist, setSunDist] = useState(0)
+  const [tab, setTab] = useState<'search' | 'onion'>('search')
+
+  // Status do Tor
+  const [status, setStatus] = useState<TorStatus | null>(null)
+  const [statusLoading, setStatusLoading] = useState(true)
+  const [nymMessage, setNymMessage] = useState<string | null>(null)
+  const [nymLoading, setNymLoading] = useState(false)
+
+  // Busca
+  const [query, setQuery] = useState('')
+  const [engine, setEngine] = useState<SearchEngine>('duckduckgo')
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [response, setResponse] = useState<SearchResponse | null>(null)
+
+  // Visualizador .onion
+  const [onionInput, setOnionInput] = useState('')
+  const [onionSrc, setOnionSrc] = useState<string | null>(null)
+
+  // Configurações
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [baseDraft, setBaseDraft] = useState(getBase())
+  const [tokenDraft, setTokenDraft] = useState(getToken())
+
+  const toastTimer = useRef<number | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 4500)
+  }, [])
+
+  const loadStatus = useCallback(async () => {
+    setStatusLoading(true)
+    try {
+      const s = await fetchStatus()
+      setStatus(s)
+    } catch {
+      setStatus({
+        tor: false,
+        isTor: null,
+        exitIp: null,
+        latencyMs: null,
+        error: 'Falha ao consultar o servidor.',
+      })
+    } finally {
+      setStatusLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    if (!mountRef.current) return
-    const engine = new SolarEngine(mountRef.current)
-    engineRef.current = engine
-    if (import.meta.env.DEV) (window as any).__engine = engine
-    engine.onMarkers = setMarkers
-    engine.onTick = (i) => {
-      setDate(i.date)
-      setFps(i.fps)
-      setDist(i.focusDist / KM)
-    }
-    engine.onPick = (id) => {
-      if (id) {
-        setSelected(id)
-        setFocus(id)
-        engine.focusBody(id)
-        setInfoOpen(true)
+    loadStatus()
+    const id = window.setInterval(loadStatus, 30000)
+    return () => window.clearInterval(id)
+  }, [loadStatus])
+
+  const runSearch = useCallback(
+    async (e?: React.FormEvent) => {
+      e?.preventDefault()
+      const q = query.trim()
+      if (!q || searching) return
+      setSearching(true)
+      setSearchError(null)
+      setResponse(null)
+      try {
+        const res = await fetchSearch(q, engine)
+        setResponse(res)
+      } catch (err) {
+        setSearchError((err as Error).message)
+      } finally {
+        setSearching(false)
       }
-    }
-    const ro = new ResizeObserver(() => engine.resize())
-    ro.observe(mountRef.current)
-    const onResize = () => {
-      engine.resize()
-      setCompact(window.innerWidth <= 860 || window.innerHeight <= 560)
-    }
-    window.addEventListener('resize', onResize)
-    const t = setTimeout(() => setBooted(true), 900)
+    },
+    [query, engine, searching],
+  )
 
-    const stats = setInterval(() => {
-      const f = engineRef.current?.state.focus
-      if (!f) return
-      setSpeedKmS(engineRef.current!.speedKmS(f))
-      setSunDist(engineRef.current!.distanceKm(f, 'sun'))
-    }, 250)
-
-    return () => {
-      clearTimeout(t)
-      clearInterval(stats)
-      ro.disconnect()
-      window.removeEventListener('resize', onResize)
-      engine.dispose()
-    }
+  const openOnion = useCallback((raw: string) => {
+    const u = raw.trim()
+    if (!u) return
+    setOnionSrc(null)
+    setTab('onion')
+    setOnionInput(u)
+    setOnionSrc(proxyHref(u))
   }, [])
 
-  const setEngineFocus = useCallback((id: string) => {
-    setFocus(id)
-    setSelected(id)
-    engineRef.current?.focusBody(id)
-  }, [])
+  const submitOnion = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault()
+      openOnion(onionInput)
+    },
+    [onionInput, openOnion],
+  )
 
-  useEffect(() => {
-    const e = engineRef.current
-    if (!e) return
-    e.state.paused = paused
-    e.state.timeScale = TIME_STEPS[speedIdx].v
-    e.state.planetScale = planetScale
-    e.state.realScale = realScale
-    e.state.showOrbits = showOrbits
-  }, [paused, speedIdx, planetScale, realScale, showOrbits])
+  const openResult = useCallback(
+    (r: SearchResult) => {
+      if (r.onion) {
+        openOnion(r.url)
+      } else {
+        window.open(r.url, '_blank', 'noopener,noreferrer')
+      }
+    },
+    [openOnion],
+  )
 
-  // atalhos de teclado
-  useEffect(() => {
-    const onKey = (ev: KeyboardEvent) => {
-      if ((ev.target as HTMLElement)?.tagName === 'INPUT') return
-      if (ev.code === 'Space') {
-        ev.preventDefault()
-        setPaused((p) => !p)
-      } else if (ev.key === '.') setSpeedIdx((i) => Math.min(TIME_STEPS.length - 1, i + 1))
-      else if (ev.key === ',') setSpeedIdx((i) => Math.max(0, i - 1))
-      else if (ev.key.toLowerCase() === 'o') setShowOrbits((s) => !s)
-      else if (ev.key.toLowerCase() === 'l') setShowLabels((s) => !s)
-      else if (ev.key.toLowerCase() === 'r') setRealScale((s) => !s)
-      else if (ev.key.toLowerCase() === 'h') setUiHidden((s) => !s)
+  const handleNewNym = useCallback(async () => {
+    setNymLoading(true)
+    setNymMessage(null)
+    try {
+      const r = await fetchNewNym()
+      if (r.ok) {
+        showToast('🧅 ' + (r.message || 'Novo circuito criado'))
+        await loadStatus()
+      } else {
+        setNymMessage(r.message || 'Falha ao trocar de identidade')
+      }
+    } catch (err) {
+      setNymMessage((err as Error).message)
+    } finally {
+      setNymLoading(false)
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [loadStatus, showToast])
 
-  const body = selected ? BODY_MAP.get(selected) : null
-  const planets = BODIES.filter((b) => b.kind === 'planet' || b.kind === 'star' || b.kind === 'dwarf' || b.kind === 'comet')
-  const moons = BODIES.filter((b) => b.kind === 'moon')
+  const saveSettings = useCallback(() => {
+    setBase(baseDraft)
+    setToken(tokenDraft)
+    setSettingsOpen(false)
+    showToast('Configurações salvas. Recarregue o status.')
+    loadStatus()
+  }, [baseDraft, tokenDraft, loadStatus, showToast])
+
+  const torOk = status?.tor === true
 
   return (
-    <div className={`app ${compact ? 'compact' : ''}`}>
-      <div className="viewport" ref={mountRef} />
-
-      {showLabels && (
-        <div className="markers">
-          {declutter(markers)
-            .map((m) => (
-              <button
-                key={m.id}
-                className={`marker ${m.focused ? 'is-focus' : ''} kind-${m.kind}`}
-                style={{ transform: `translate(${m.x}px, ${m.y}px)`, ['--c' as any]: m.color }}
-                onClick={() => {
-                  setEngineFocus(m.id)
-                  setInfoOpen(true)
-                }}
-              >
-                <span className="dot" />
-                <span className="label">{m.name}</span>
-              </button>
-            ))}
-        </div>
-      )}
-
-      {uiHidden && (
-        <button className="showui" onClick={() => setUiHidden(false)} title="Mostrar interface (H)">
-          Mostrar UI
-        </button>
-      )}
-
-      {!uiHidden && (
+    <div className="app">
       <header className="topbar">
-        <div className="brand">
-          <span className="logo" />
-          <div>
-            <h1>Solar System 3D</h1>
-            <p>Simulador realista em tempo real</p>
+        <div className="brand" onClick={() => setTab('search')}>
+          <OnionMark size={34} />
+          <div className="brand-text">
+            <h1>OnionSearch</h1>
+            <p>busca na deep web via Tor · Termux</p>
           </div>
         </div>
-        <div className="clock">
-          <div className="date">
-            {date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'UTC' })}
-          </div>
-          <div className="time">
-            {date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC
-          </div>
-        </div>
-        <div className="topActions">
-          <button className="ghost" onClick={() => setListOpen((s) => !s)} title="Lista de corpos">
-            {listOpen ? 'Fechar lista' : 'Corpos'}
+
+        <div className="topbar-actions">
+          <StatusPill
+            status={status}
+            loading={statusLoading}
+            onRefresh={loadStatus}
+          />
+          <button
+            className="btn btn-ghost"
+            onClick={handleNewNym}
+            disabled={nymLoading}
+            title="Pedir um novo circuito ao Tor (SIGNAL NEWNYM)"
+          >
+            {nymLoading ? (
+              <Loader2 size={16} className="spin" />
+            ) : (
+              <RefreshCw size={16} />
+            )}
+            Nova identidade
           </button>
-          <button className="ghost" onClick={() => setUiHidden(true)} title="Modo foto (H)">
-            Ocultar UI
+          <button
+            className="btn btn-icon"
+            onClick={() => setSettingsOpen((v) => !v)}
+            title="Configurações"
+          >
+            <Settings size={18} />
           </button>
         </div>
       </header>
-      )}
 
-      {!uiHidden && listOpen && (
-        <aside className="sidebar">
-          <div className="card">
-            <h2>Corpos</h2>
-            <div className="chips">
-              {planets.map((b) => (
-                <button
-                  key={b.id}
-                  className={`chip ${focus === b.id ? 'active' : ''}`}
-                  style={{ ['--c' as any]: b.color }}
-                  onClick={() => setEngineFocus(b.id)}
-                >
-                  <i />
-                  {b.name}
-                </button>
-              ))}
-            </div>
-            <h3>Luas</h3>
-            <div className="chips small">
-              {moons.map((b) => (
-                <button
-                  key={b.id}
-                  className={`chip ${focus === b.id ? 'active' : ''}`}
-                  style={{ ['--c' as any]: b.color }}
-                  onClick={() => setEngineFocus(b.id)}
-                >
-                  <i />
-                  {b.name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="card">
-            <h2>Visualização</h2>
-            <label className="row">
-              <span>Tamanho dos corpos</span>
-              <strong>{realScale ? 'real' : `${planetScale.toFixed(0)}×`}</strong>
-            </label>
-            <input
-              type="range"
-              min={1}
-              max={60}
-              step={1}
-              value={planetScale}
-              disabled={realScale}
-              onChange={(e) => setPlanetScale(+e.target.value)}
-            />
-            <div className="toggles">
-              <button className={`toggle ${realScale ? 'on' : ''}`} onClick={() => setRealScale((s) => !s)}>
-                Escala real (R)
-              </button>
-              <button className={`toggle ${showOrbits ? 'on' : ''}`} onClick={() => setShowOrbits((s) => !s)}>
-                Órbitas (O)
-              </button>
-              <button className={`toggle ${showLabels ? 'on' : ''}`} onClick={() => setShowLabels((s) => !s)}>
-                Rótulos (L)
-              </button>
-            </div>
-          </div>
-        </aside>
-      )}
-
-      {!uiHidden && body && infoOpen && (
-        <section className="infopanel">
-          <button className="close" onClick={() => setInfoOpen(false)} aria-label="Fechar">
-            ×
-          </button>
-          <div className="ihead" style={{ ['--c' as any]: body.color }}>
-            <span className="ibadge">{KIND_LABEL[body.kind]}</span>
-            <h2>{body.name}</h2>
-          </div>
-          <p className="fact">{body.fact}</p>
-          <dl className="stats">
-            <div>
-              <dt>Raio</dt>
-              <dd>{body.radius.toLocaleString('pt-BR')} km</dd>
-            </div>
-            <div>
-              <dt>Massa</dt>
-              <dd>{body.mass}</dd>
-            </div>
-            <div>
-              <dt>Gravidade</dt>
-              <dd>{body.gravity}</dd>
-            </div>
-            <div>
-              <dt>Temperatura</dt>
-              <dd>{body.temp}</dd>
-            </div>
-            <div>
-              <dt>Dia</dt>
-              <dd>{body.day}</dd>
-            </div>
-            <div>
-              <dt>Ano</dt>
-              <dd>{body.year}</dd>
-            </div>
-            <div>
-              <dt>Luas</dt>
-              <dd>{body.moons}</dd>
-            </div>
-            <div>
-              <dt>Descoberta</dt>
-              <dd>{body.discovered}</dd>
-            </div>
-          </dl>
-          <div className="live">
-            <div>
-              <span>Distância do Sol</span>
-              <strong>{fmtDist(sunDist)}</strong>
-            </div>
-            <div>
-              <span>Velocidade orbital</span>
-              <strong>{speedKmS.toFixed(2)} km/s</strong>
-            </div>
-            <div>
-              <span>Altitude da câmera</span>
-              <strong>{fmtDist(Math.max(dist, 0))}</strong>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {!uiHidden && body && !infoOpen && (
-        <button className="reopen" onClick={() => setInfoOpen(true)} style={{ ['--c' as any]: body.color }}>
-          <i />
-          {body.name}
-        </button>
-      )}
-
-      {!uiHidden && (
-        <footer className="timebar">
-          <button className="play" onClick={() => setPaused((p) => !p)} title="Espaço">
-            {paused ? '▶' : '❚❚'}
-          </button>
-          <button className="step" onClick={() => setSpeedIdx((i) => Math.max(0, i - 1))} title=",">
-            ◀◀
-          </button>
-          <div className="speed">
-            <span>{TIME_STEPS[speedIdx].label}</span>
-            <input
-              type="range"
-              min={0}
-              max={TIME_STEPS.length - 1}
-              step={1}
-              value={speedIdx}
-              onChange={(e) => setSpeedIdx(+e.target.value)}
-            />
-          </div>
-          <button className="step" onClick={() => setSpeedIdx((i) => Math.min(TIME_STEPS.length - 1, i + 1))} title=".">
-            ▶▶
-          </button>
+      {nymMessage && (
+        <div className="banner banner-warn">
+          <ShieldAlert size={16} />
+          <span>{nymMessage}</span>
           <button
-            className="ghost"
-            onClick={() => {
-              engineRef.current?.setTime(daysSinceJ2000(new Date()))
-              setSpeedIdx(5)
-            }}
+            className="banner-close"
+            onClick={() => setNymMessage(null)}
+            aria-label="Fechar"
           >
-            Hoje
+            <X size={16} />
           </button>
-          <span className="fps">{fps.toFixed(0)} fps</span>
-        </footer>
+        </div>
       )}
 
-      <div className={`boot ${booted ? 'done' : ''}`}>
-        <div className="bootInner">
-          <div className="ring" />
-          <h2>Solar System 3D</h2>
-          <p>Calculando órbitas keplerianas…</p>
-        </div>
+      {settingsOpen && (
+        <SettingsPanel
+          base={baseDraft}
+          token={tokenDraft}
+          onBase={setBaseDraft}
+          onToken={setTokenDraft}
+          onSave={saveSettings}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
+      <nav className="tabs">
+        <button
+          className={`tab ${tab === 'search' ? 'active' : ''}`}
+          onClick={() => setTab('search')}
+        >
+          <Search size={16} /> Buscar
+        </button>
+        <button
+          className={`tab ${tab === 'onion' ? 'active' : ''}`}
+          onClick={() => setTab('onion')}
+        >
+          <Link2 size={16} /> Abrir .onion
+        </button>
+      </nav>
+
+      <main className="content">
+        {tab === 'search' ? (
+          <SearchView
+            query={query}
+            setQuery={setQuery}
+            engine={engine}
+            setEngine={setEngine}
+            searching={searching}
+            onSearch={runSearch}
+            error={searchError}
+            response={response}
+            torOk={torOk}
+            onOpenResult={openResult}
+          />
+        ) : (
+          <OnionView
+            value={onionInput}
+            setValue={setOnionInput}
+            src={onionSrc}
+            onSubmit={submitOnion}
+          />
+        )}
+      </main>
+
+      <footer className="footer">
+        <span>
+          🔒 Toda requisição sai pelo Tor. Você é anônimo, não invencível — não
+          entre com contas pessoais.
+        </span>
+      </footer>
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  )
+}
+
+function StatusPill({
+  status,
+  loading,
+  onRefresh,
+}: {
+  status: TorStatus | null
+  loading: boolean
+  onRefresh: () => void
+}) {
+  const ok = status?.tor === true
+  return (
+    <button
+      className={`status-pill ${ok ? 'ok' : 'down'}`}
+      onClick={onRefresh}
+      title={ok ? 'Clique para atualizar' : (status?.error ?? 'Verificando…')}
+    >
+      {loading ? (
+        <Loader2 size={15} className="spin" />
+      ) : ok ? (
+        <ShieldCheck size={15} />
+      ) : (
+        <ShieldAlert size={15} />
+      )}
+      <span className="status-dot" />
+      <span className="status-text">
+        {loading ? 'Verificando…' : ok ? 'Tor conectado' : 'Tor offline'}
+      </span>
+      {ok && status?.exitIp && (
+        <span className="status-ip">{status.exitIp}</span>
+      )}
+    </button>
+  )
+}
+
+function SettingsPanel({
+  base,
+  token,
+  onBase,
+  onToken,
+  onSave,
+  onClose,
+}: {
+  base: string
+  token: string
+  onBase: (v: string) => void
+  onToken: (v: string) => void
+  onSave: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="settings">
+      <div className="settings-head">
+        <h2>Configurações</h2>
+        <button className="btn btn-icon" onClick={onClose} aria-label="Fechar">
+          <X size={18} />
+        </button>
+      </div>
+      <label className="field">
+        <span>Endereço do servidor (Termux)</span>
+        <input
+          value={base}
+          onChange={(e) => onBase(e.target.value)}
+          placeholder="vazio = mesma origem (ex.: http://192.168.0.10:3000)"
+        />
+        <small>
+          Deixe vazio se você abre o site pelo próprio celular. Use o IP do
+          celular se estiver acessando de outro aparelho na mesma rede.
+        </small>
+      </label>
+      <label className="field">
+        <span>Token de acesso (opcional)</span>
+        <input
+          value={token}
+          onChange={(e) => onToken(e.target.value)}
+          placeholder="igual ao AUTH_TOKEN definido no servidor"
+        />
+      </label>
+      <div className="settings-actions">
+        <button className="btn btn-primary" onClick={onSave}>
+          Salvar
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SearchView({
+  query,
+  setQuery,
+  engine,
+  setEngine,
+  searching,
+  onSearch,
+  error,
+  response,
+  torOk,
+  onOpenResult,
+}: {
+  query: string
+  setQuery: (v: string) => void
+  engine: SearchEngine
+  setEngine: (v: SearchEngine) => void
+  searching: boolean
+  onSearch: (e?: React.FormEvent) => void
+  error: string | null
+  response: SearchResponse | null
+  torOk: boolean
+  onOpenResult: (r: SearchResult) => void
+}) {
+  return (
+    <div className="search-view">
+      <form className="searchbox" onSubmit={onSearch}>
+        <Search size={20} className="searchbox-icon" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Pesquise anonimamente…"
+          autoFocus
+          spellCheck={false}
+          autoComplete="off"
+        />
+        <button
+          type="submit"
+          className="btn btn-primary"
+          disabled={searching || !query.trim()}
+        >
+          {searching ? <Loader2 size={16} className="spin" /> : <Search size={16} />}
+          {searching ? 'Buscando…' : 'Buscar'}
+        </button>
+      </form>
+
+      <div className="engine-row">
+        {ENGINES.map((e) => (
+          <button
+            key={e.id}
+            className={`engine-chip ${engine === e.id ? 'active' : ''}`}
+            onClick={() => setEngine(e.id)}
+            title={e.hint}
+          >
+            <span className="engine-name">{e.label}</span>
+            <span className="engine-badge">{e.badge}</span>
+          </button>
+        ))}
+        <span className="engine-hint">
+          {ENGINES.find((e) => e.id === engine)?.hint}
+        </span>
       </div>
 
-      {!uiHidden && <div className="hint">Arraste para orbitar · rolagem/pinça para zoom · clique num corpo para focar</div>}
+      {!torOk && !searching && (
+        <div className="banner banner-warn">
+          <ShieldAlert size={16} />
+          <span>
+            Tor está offline — as buscas vão falhar. Inicie o Tor no Termux (
+            <code>tor</code>) e clique em “Nova identidade”.
+          </span>
+        </div>
+      )}
+
+      {error && (
+        <div className="banner banner-error">
+          <ShieldAlert size={16} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {response && (
+        <div className="results">
+          <div className="results-meta">
+            <span>
+              {response.results.length}{' '}
+              {response.results.length === 1 ? 'resultado' : 'resultados'} para{' '}
+              <strong>{response.query}</strong>
+            </span>
+            <span className="muted">em {response.tookMs} ms · via Tor</span>
+          </div>
+
+          {response.results.length === 0 ? (
+            <div className="empty">
+              <Globe size={28} />
+              <p>Nenhum resultado encontrado. Tente outros termos.</p>
+            </div>
+          ) : (
+            <ul className="result-list">
+              {response.results.map((r, i) => (
+                <ResultCard key={i} result={r} onOpen={() => onOpenResult(r)} />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {!response && !error && !searching && (
+        <div className="hero-hint">
+          <Lock size={20} />
+          <p>
+            Digite um termo e escolha o motor.{' '}
+            <strong>DuckDuckGo</strong> busca a web indexada sem rastrear você;{' '}
+            <strong>Ahmia</strong> busca serviços ocultos <code>.onion</code>.
+            Todo o tráfego sai pelo Tor.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ResultCard({
+  result,
+  onOpen,
+}: {
+  result: SearchResult
+  onOpen: () => void
+}) {
+  const host = useMemo(() => {
+    try {
+      return new URL(result.url).hostname
+    } catch {
+      return result.displayUrl || result.url
+    }
+  }, [result])
+
+  return (
+    <li className="result-card">
+      <div className="result-main">
+        <button className="result-title" onClick={onOpen}>
+          {result.title}
+        </button>
+        {result.snippet && <p className="result-snippet">{result.snippet}</p>}
+      </div>
+      <div className="result-foot">
+        <span className={`result-host ${result.onion ? 'onion' : ''}`}>
+          {result.onion && <Link2 size={13} />}
+          {host}
+        </span>
+        {result.onion ? (
+          <button className="result-open" onClick={onOpen}>
+            Abrir no visualizador <ExternalLink size={13} />
+          </button>
+        ) : (
+          <button className="result-open" onClick={onOpen}>
+            Abrir <ExternalLink size={13} />
+          </button>
+        )}
+      </div>
+    </li>
+  )
+}
+
+function OnionView({
+  value,
+  setValue,
+  src,
+  onSubmit,
+}: {
+  value: string
+  setValue: (v: string) => void
+  src: string | null
+  onSubmit: (e: React.FormEvent) => void
+}) {
+  return (
+    <div className="onion-view">
+      <form className="searchbox onion-bar" onSubmit={onSubmit}>
+        <Globe size={20} className="searchbox-icon" />
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="http://xxxxxxxxxxxxxxx.onion"
+          spellCheck={false}
+          autoComplete="off"
+        />
+        <button type="submit" className="btn btn-primary" disabled={!value.trim()}>
+          Abrir
+        </button>
+      </form>
+
+      <p className="onion-note">
+        Cole um endereço <code>.onion</code>. A página é baixada e exibida aqui,
+        passando pelo Tor. Navegação limitada (JavaScript/complexos podem não
+        funcionar) — para uso completo, prefira o Tor Browser.
+      </p>
+
+      {src ? (
+        <iframe
+          className="onion-frame"
+          src={src}
+          title="Visualizador .onion"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation-by-user-activation"
+          referrerPolicy="no-referrer"
+        />
+      ) : (
+        <div className="empty">
+          <Globe size={28} />
+          <p>Nenhuma página aberta ainda.</p>
+        </div>
+      )}
     </div>
   )
 }

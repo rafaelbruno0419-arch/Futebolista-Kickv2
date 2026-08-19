@@ -1,26 +1,30 @@
 {
-  "name": "solar-system-3d",
+  "name": "onionsearch",
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "description": "Interface web para buscas anônimas na deep web via Tor, rodando no Termux.",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "server": "node server/index.js",
+    "start": "node server/index.js"
   },
   "dependencies": {
-    "@types/three": "^0.185.4",
-    "@vitejs/plugin-react": "latest",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "three": "^0.185.1",
-    "vite": "latest"
+    "express": "^4.21.2",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "socks-proxy-agent": "^8.0.5"
   },
   "devDependencies": {
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "typescript": "latest"
+    "@types/node": "^26.2.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^5.2.0",
+    "typescript": "^5.6.3",
+    "vite": "^7.3.6"
   }
 }
