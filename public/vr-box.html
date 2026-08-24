@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>VR Box — Hand Tracking 3D</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Segoe UI',system-ui,sans-serif;color:#fff;touch-action:none;-webkit-user-select:none;user-select:none}
+
+/* ── Start Screen ─────────────────────────────────────── */
+#startScreen{
+  position:fixed;inset:0;z-index:1000;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse at 50% 40%,#0a1628 0%,#000 70%);
+}
+#startScreen h1{
+  font-size:clamp(1.6rem,5vw,2.4rem);
+  background:linear-gradient(135deg,#00e5ff,#7c4dff,#ff4081);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  margin-bottom:.4rem;letter-spacing:.05em;
+}
+#startScreen .subtitle{color:#80cbc4;font-size:clamp(.8rem,2.5vw,1rem);margin-bottom:2rem;text-align:center;padding:0 1.5rem}
+#startScreen .instructions{
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
+  border-radius:16px;padding:1.2rem 1.6rem;max-width:360px;width:90%;margin-bottom:2rem;
+}
+#startScreen .instructions li{
+  list-style:none;padding:.45rem 0;font-size:.85rem;color:#b0bec5;
+  display:flex;align-items:flex-start;gap:.6rem;
+}
+#startScreen .instructions li .icon{font-size:1.1rem;flex-shrink:0}
+#btnStart{
+  padding:1rem 3rem;font-size:1.15rem;font-weight:700;border:none;border-radius:50px;cursor:pointer;
+  background:linear-gradient(135deg,#00e5ff,#7c4dff);color:#fff;
+  box-shadow:0 0 30px rgba(0,229,255,.3),0 0 60px rgba(124,77,255,.15);
+  transition:transform .2s,box-shadow .2s;letter-spacing:.04em;
+}
+#btnStart:active{transform:scale(.96);box-shadow:0 0 15px rgba(0,229,255,.5)}
+#startScreen .footer-note{margin-top:1.5rem;font-size:.7rem;color:#546e7a;text-align:center;padding:0 1rem}
+
+/* ── Loading overlay ──────────────────────────────────── */
+#loadingOverlay{
+  position:fixed;inset:0;z-index:999;display:none;
+  align-items:center;justify-content:center;flex-direction:column;
+  background:rgba(0,0,0,.92);
+}
+#loadingOverlay.active{display:flex}
+.spinner{
+  width:48px;height:48px;border:3px solid rgba(255,255,255,.1);
+  border-top-color:#00e5ff;border-radius:50%;
+  animation:spin .8s linear infinite;margin-bottom:1rem;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loadingOverlay p{color:#80cbc4;font-size:.9rem}
+
+/* ── Canvas ───────────────────────────────────────────── */
+#glCanvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+
+/* ── HUD ──────────────────────────────────────────────── */
+#hud{
+  position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:10;
+  display:flex;gap:8px;pointer-events:none;
+}
+.hud-badge{
+  padding:3px 10px;border-radius:20px;font-size:.65rem;font-weight:600;
+  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.1);
+  backdrop-filter:blur(6px);color:#80cbc4;white-space:nowrap;
+}
+#hud.hidden{display:none}
+
+/* ── Hidden video ─────────────────────────────────────── */
+#camVideo{position:absolute;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ START SCREEN ═══════════════ -->
+<div id="startScreen">
+  <h1>🥽 VR Box Mode</h1>
+  <p class="subtitle">Experiência 3D Estereoscópica com Controle por Gestos</p>
+  <ul class="instructions">
+    <li><span class="icon">📱</span>Coloque o celular no VR Box</li>
+    <li><span class="icon">✋</span>Mostre sua mão para a câmera traseira</li>
+    <li><span class="icon">👆</span>Aponte com o indicador para controlar o cursor</li>
+    <li><span class="icon">🤏</span>Junte polegar + indicador (pinça) para arrastar a janela</li>
+    <li><span class="icon">🎮</span>Use os botões na tela flutuante para controlar o player</li>
+  </ul>
+  <button id="btnStart">▶ Iniciar VR</button>
+  <p class="footer-note">Permissão da câmera será solicitada ao iniciar.<br>Mantenha a mão visível para a câmera traseira.</p>
+</div>
+
+<!-- ═══════════════ LOADING ═══════════════ -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <p id="loadingText">Carregando modelos de detecção…</p>
+</div>
+
+<!-- ═══════════════ HUD ═══════════════ -->
+<div id="hud" class="hidden">
+  <span class="hud-badge" id="hudFps">FPS: --</span>
+  <span class="hud-badge" id="hudHand">✋ Sem mão</span>
+  <span class="hud-badge" id="hudPinch">🤏 --</span>
+</div>
+
+<!-- ═══════════════ CANVAS ═══════════════ -->
+<canvas id="glCanvas"></canvas>
+
+<!-- ═══════════════ HIDDEN VIDEO ═══════════════ -->
+<video id="camVideo" playsinline autoplay muted></video>
+
+<!-- ═══════════════ SCRIPTS ═══════════════ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js"></script>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   VR BOX STEREOSCOPIC — HAND TRACKING — THREE.JS
+   ═══════════════════════════════════════════════════════════ */
+
+(function(){
+"use strict";
+
+// ── DOM refs ──────────────────────────────────────────────
+const startScreen   = document.getElementById("startScreen");
+const btnStart      = document.getElementById("btnStart");
+const loadingOverlay= document.getElementById("loadingOverlay");
+const loadingText   = document.getElementById("loadingText");
+const canvas        = document.getElementById("glCanvas");
+const video         = document.getElementById("camVideo");
+const hud           = document.getElementById("hud");
+const hudFps        = document.getElementById("hudFps");
+const hudHand       = document.getElementById("hudHand");
+const hudPinch      = document.getElementById("hudPinch");
+
+// ── Constants ─────────────────────────────────────────────
+const IPD           = 0.064;   // interpupillary distance in meters
+const NEAR          = 0.1;
+const FAR           = 100;
+const FOV           = 75;
+const PINCH_THRESH  = 0.05;
+const LASER_LEN     = 8;
+
+// ── State ─────────────────────────────────────────────────
+let handLandmarks   = null;
+let isPinching      = false;
+let isDragging      = false;
+let dragOffset      = new THREE.Vector3();
+let windowHomePos   = new THREE.Vector3(0, 0.3, -3.5);
+let fpsFrames       = 0;
+let fpsTime         = performance.now();
+let handDetector    = null;
+let cameraRunning   = false;
+let prevTime        = 0;
+let lastBtnHitTime  = 0;
+let lastPinchState  = false;
+
+// ── Three.js setup ────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:false});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 1);
+renderer.autoClear = false;
+
+const scene = new THREE.Scene();
+
+// ── Cameras (stereoscopic) ────────────────────────────────
+const aspect = (window.innerWidth / 2) / window.innerHeight;
+const leftCamera  = new THREE.PerspectiveCamera(FOV, aspect, NEAR, FAR);
+const rightCamera = new THREE.PerspectiveCamera(FOV, aspect, NEAR, FAR);
+
+function updateCameras(){
+  const halfIPD = IPD / 2;
+  leftCamera.position.set(-halfIPD, 1.6, 0);
+  rightCamera.position.set(halfIPD, 1.6, 0);
+  leftCamera.lookAt(0, 1.6, -5);
+  rightCamera.lookAt(0, 1.6, -5);
+}
+updateCameras();
+
+// ── Lights ────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x223344, 0.6));
+
+const dirLight = new THREE.DirectionalLight(0x88ccff, 0.8);
+dirLight.position.set(5, 10, 5);
+scene.add(dirLight);
+
+const pointLight1 = new THREE.PointLight(0x00e5ff, 1.5, 20);
+pointLight1.position.set(-3, 3, -2);
+scene.add(pointLight1);
+
+const pointLight2 = new THREE.PointLight(0x7c4dff, 1.2, 20);
+pointLight2.position.set(3, 2, -4);
+scene.add(pointLight2);
+
+// ── Futuristic background: star field ─────────────────────
+function createStarField(){
+  const count = 2000;
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(count * 3);
+  const col = new Float32Array(count * 3);
+  for(let i = 0; i < count; i++){
+    const r = 30 + Math.random() * 50;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    pos[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+    pos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+    pos[i*3+2] = r * Math.cos(phi);
+    const c = new THREE.Color().setHSL(0.55 + Math.random()*0.15, 0.6, 0.5 + Math.random()*0.4);
+    col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+  }
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  const mat = new THREE.PointsMaterial({size:0.08, vertexColors:true, transparent:true, opacity:0.8, sizeAttenuation:true});
+  const stars = new THREE.Points(geo, mat);
+  scene.add(stars);
+  return stars;
+}
+const starField = createStarField();
+
+// ── Grid floor ────────────────────────────────────────────
+(function createGrid(){
+  const gridMat = new THREE.LineBasicMaterial({color:0x0a2a3a, transparent:true, opacity:0.4});
+  const size = 40, step = 1;
+  for(let i = -size/2; i <= size/2; i += step){
+    const g1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(i,0,-size/2), new THREE.Vector3(i,0,size/2)]);
+    const g2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-size/2,0,i), new THREE.Vector3(size/2,0,i)]);
+    scene.add(new THREE.Line(g1, gridMat));
+    scene.add(new THREE.Line(g2, gridMat));
+  }
+})();
+
+// ── Floating particles ────────────────────────────────────
+const floatingParticles = (function(){
+  const count = 120;
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(count * 3);
+  for(let i = 0; i < count; i++){
+    pos[i*3]   = (Math.random()-0.5)*16;
+    pos[i*3+1] = Math.random()*6 + 0.5;
+    pos[i*3+2] = (Math.random()-0.5)*16 - 2;
+  }
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({color:0x00e5ff, size:0.04, transparent:true, opacity:0.6, sizeAttenuation:true});
+  const pts = new THREE.Points(geo, mat);
+  scene.add(pts);
+  return pts;
+})();
+
+// ═══════════════════════════════════════════════════════════
+//  FLOATING WINDOW (YouTube Player Panel)
+// ═══════════════════════════════════════════════════════════
+
+const WINDOW_W = 3.2;
+const WINDOW_H = 2.0;
+const WINDOW_DEPTH = 0.06;
+
+const windowGroup = new THREE.Group();
+windowGroup.position.copy(windowHomePos);
+scene.add(windowGroup);
+
+// ── Window frame (glass panel) ────────────────────────────
+const frameMesh = new THREE.Mesh(
+  new THREE.BoxGeometry(WINDOW_W + 0.12, WINDOW_H + 0.12, WINDOW_DEPTH),
+  new THREE.MeshPhysicalMaterial({
+    color:0x1a1a2e, metalness:0.8, roughness:0.2,
+    transparent:true, opacity:0.85,
+    emissive:0x0a0a1a, emissiveIntensity:0.3
+  })
+);
+windowGroup.add(frameMesh);
+
+// ── Title bar ─────────────────────────────────────────────
+const titleBar = new THREE.Mesh(
+  new THREE.BoxGeometry(WINDOW_W + 0.1, 0.18, WINDOW_DEPTH + 0.01),
+  new THREE.MeshStandardMaterial({color:0x16213e, emissive:0x0f3460, emissiveIntensity:0.5})
+);
+titleBar.position.set(0, WINDOW_H/2 - 0.06, 0.01);
+windowGroup.add(titleBar);
+
+// ── Title bar dots ────────────────────────────────────────
+[0xff5f57, 0xffbd2e, 0x28c840].forEach((c, i) => {
+  const d = new THREE.Mesh(
+    new THREE.SphereGeometry(0.025, 12, 12),
+    new THREE.MeshStandardMaterial({color:c, emissive:c, emissiveIntensity:0.8})
+  );
+  d.position.set(-WINDOW_W/2 + 0.12 + i*0.08, WINDOW_H/2 - 0.06, WINDOW_DEPTH/2 + 0.02);
+  windowGroup.add(d);
+});
+
+// ── Screen surface (canvas texture) ──────────────────────
+const screenCanvas = document.createElement("canvas");
+screenCanvas.width = 640;
+screenCanvas.height = 400;
+const screenCtx = screenCanvas.getContext("2d");
+const screenTexture = new THREE.CanvasTexture(screenCanvas);
+screenTexture.minFilter = THREE.LinearFilter;
+screenTexture.magFilter = THREE.LinearFilter;
+
+const screenMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(WINDOW_W - 0.08, WINDOW_H - 0.3),
+  new THREE.MeshBasicMaterial({map: screenTexture})
+);
+screenMesh.position.set(0, -0.06, WINDOW_DEPTH/2 + 0.005);
+windowGroup.add(screenMesh);
+
+// ── Glow border shader ────────────────────────────────────
+const glowMat = new THREE.ShaderMaterial({
+  transparent:true, depthWrite:false, side:THREE.DoubleSide,
+  uniforms:{uColor:{value:new THREE.Color(0x00e5ff)}, uTime:{value:0}},
+  vertexShader:`
+    varying vec2 vUv;
+    void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }
+  `,
+  fragmentShader:`
+    uniform vec3 uColor; uniform float uTime; varying vec2 vUv;
+    void main(){
+      float d = max(abs(vUv.x-0.5), abs(vUv.y-0.5));
+      float edge = smoothstep(0.48, 0.5, d);
+      float pulse = 0.4 + 0.2*sin(uTime*2.0);
+      gl_FragColor = vec4(uColor, edge * pulse);
+    }
+  `
+});
+const glowMesh = new THREE.Mesh(new THREE.PlaneGeometry(WINDOW_W + 0.3, WINDOW_H + 0.3), glowMat);
+glowMesh.position.z = -0.01;
+windowGroup.add(glowMesh);
+
+// ── YouTube player state ──────────────────────────────────
+let ytPlayer = null;
+let ytReady = false;
+let isPlaying = false;
+let playerVolume = 70;
+const videoIds = ["dQw4w9WgXcQ","9bZkp7q19f0","kJQP7kiw5Fk","JGwWNGJdvx8","RgKAFK5djSk","fJ9rUzIMcZQ"];
+let currentVideoIdx = 0;
+
+// ── Draw screen canvas ────────────────────────────────────
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y);
+  ctx.quadraticCurveTo(x+w,y,x+w,y+r); ctx.lineTo(x+w,y+h-r);
+  ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h); ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r); ctx.lineTo(x,y+r);
+  ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+
+function drawScreen(){
+  const w = screenCanvas.width, h = screenCanvas.height;
+  const ctx = screenCtx;
+
+  // Background
+  const grad = ctx.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0, "#0a0a1a");
+  grad.addColorStop(1, "#0d1117");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,w,h);
+
+  // Scanlines
+  ctx.fillStyle = "rgba(0,229,255,0.015)";
+  for(let y = 0; y < h; y += 3) ctx.fillRect(0,y,w,1);
+
+  // Video area
+  ctx.fillStyle = "#111827";
+  ctx.strokeStyle = "rgba(0,229,255,0.3)";
+  ctx.lineWidth = 1;
+  roundRect(ctx, 20, 20, w-40, h-120, 8);
+  ctx.fill(); ctx.stroke();
+
+  // Play icon
+  ctx.fillStyle = "rgba(0,229,255,0.15)";
+  ctx.beginPath(); ctx.arc(w/2, (h-100)/2 + 10, 40, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "#00e5ff";
+  ctx.font = "bold 36px sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(isPlaying ? "🔊" : "▶", w/2, (h-100)/2 + 12);
+
+  // Title
+  ctx.fillStyle = "#e0e0e0";
+  ctx.font = "bold 14px sans-serif";
+  ctx.fillText("🎵 Player de Música VR", w/2, 50);
+  ctx.fillStyle = "#80cbc4";
+  ctx.font = "11px sans-serif";
+  ctx.fillText(isPlaying ? "Reproduzindo..." : "Pausado — toque ▶ para iniciar", w/2, 70);
+
+  // Volume bar
+  ctx.fillStyle = "#1e293b";
+  roundRect(ctx, 40, h-110, w-80, 6, 3); ctx.fill();
+  ctx.fillStyle = "#00e5ff";
+  roundRect(ctx, 40, h-110, (w-80)*(playerVolume/100), 6, 3); ctx.fill();
+  ctx.fillStyle = "#546e7a";
+  ctx.font = "10px sans-serif"; ctx.textAlign = "left";
+  ctx.fillText("Vol: "+playerVolume+"%", 40, h-94);
+
+  // Control buttons
+  [{label:"⏮",x:w*0.18},{label:isPlaying?"⏸":"▶",x:w*0.38},{label:"⏹",x:w*0.58},{label:"⏭",x:w*0.78}].forEach(b => {
+    const bx = b.x-28, by = h-78, bw = 56, bh = 36;
+    const bGrad = ctx.createLinearGradient(bx,by,bx,by+bh);
+    bGrad.addColorStop(0,"rgba(0,229,255,0.15)"); bGrad.addColorStop(1,"rgba(124,77,255,0.1)");
+    ctx.fillStyle = bGrad;
+    ctx.strokeStyle = "rgba(0,229,255,0.4)"; ctx.lineWidth = 1;
+    roundRect(ctx, bx, by, bw, bh, 8); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(b.label, b.x, by + bh/2);
+  });
+
+  // Corner decorations
+  ctx.strokeStyle = "rgba(0,229,255,0.2)"; ctx.lineWidth = 1;
+  [[20,20,1,1],[w-20,20,-1,1],[20,h-20,1,-1],[w-20,h-20,-1,-1]].forEach(([cx,cy,dx,dy])=>{
+    ctx.beginPath(); ctx.moveTo(cx,cy+15*dy); ctx.lineTo(cx,cy); ctx.lineTo(cx+15*dx,cy); ctx.stroke();
+  });
+
+  screenTexture.needsUpdate = true;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  HAND TRACKING VISUALIZATION
+// ═══════════════════════════════════════════════════════════
+
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [0,9],[9,10],[10,11],[11,12],
+  [0,13],[13,14],[14,15],[15,16],
+  [0,17],[17,18],[18,19],[19,20],
+  [5,9],[9,13],[13,17]
+];
+
+// ── Hand spheres ──────────────────────────────────────────
+const handSpheres = [];
+const handSphereGeo = new THREE.SphereGeometry(0.025, 16, 16);
+for(let i = 0; i < 21; i++){
+  const isIndex = i === 8, isThumb = i === 4;
+  const mat = new THREE.MeshStandardMaterial({
+    color: isIndex ? 0xff4081 : isThumb ? 0x7c4dff : 0x00e5ff,
+    emissive: isIndex ? 0xff4081 : isThumb ? 0x7c4dff : 0x00e5ff,
+    emissiveIntensity: 0.8, transparent: true, opacity: 0.9
+  });
+  const sphere = new THREE.Mesh(handSphereGeo, mat);
+  sphere.visible = false;
+  scene.add(sphere);
+  handSpheres.push(sphere);
+}
+
+// ── Hand cylinders (connections) ──────────────────────────
+const handCylinders = [];
+const _cylGeo = new THREE.CylinderGeometry(0.008, 0.008, 1, 8);
+HAND_CONNECTIONS.forEach(() => {
+  const mat = new THREE.MeshStandardMaterial({
+    color:0x00e5ff, emissive:0x00e5ff, emissiveIntensity:0.4,
+    transparent:true, opacity:0.6
+  });
+  const cyl = new THREE.Mesh(_cylGeo, mat);
+  cyl.visible = false;
+  scene.add(cyl);
+  handCylinders.push(cyl);
+});
+
+// Helper: position cylinder between two points
+const _dir = new THREE.Vector3();
+const _mid = new THREE.Vector3();
+const _up = new THREE.Vector3(0,1,0);
+const _quat = new THREE.Quaternion();
+function positionCylinder(cyl, a, b){
+  _dir.subVectors(b, a);
+  const len = _dir.length();
+  _mid.addVectors(a, b).multiplyScalar(0.5);
+  cyl.position.copy(_mid);
+  cyl.scale.set(1, len, 1);
+  _quat.setFromUnitVectors(_up, _dir.normalize());
+  cyl.quaternion.copy(_quat);
+}
+
+// ── Laser beam ────────────────────────────────────────────
+const laserGeo = new THREE.CylinderGeometry(0.006, 0.001, 1, 8);
+const laserMat = new THREE.MeshBasicMaterial({color:0xff4081, transparent:true, opacity:0.7});
+const laserMesh = new THREE.Mesh(laserGeo, laserMat);
+laserMesh.visible = false;
+scene.add(laserMesh);
+
+// ── Laser hit indicator ───────────────────────────────────
+const hitMesh = new THREE.Mesh(
+  new THREE.RingGeometry(0.03, 0.06, 24),
+  new THREE.MeshBasicMaterial({color:0xff4081, transparent:true, opacity:0.8, side:THREE.DoubleSide})
+);
+hitMesh.visible = false;
+scene.add(hitMesh);
+
+// ── Cursor sphere (index tip) ─────────────────────────────
+const cursorSphere = new THREE.Mesh(
+  new THREE.SphereGeometry(0.04, 16, 16),
+  new THREE.MeshStandardMaterial({
+    color:0xff4081, emissive:0xff4081, emissiveIntensity:1.0,
+    transparent:true, opacity:0.9
+  })
+);
+cursorSphere.visible = false;
+scene.add(cursorSphere);
+
+// ═══════════════════════════════════════════════════════════
+//  MEDIAPIPE HAND LANDMARK DETECTION
+// ═══════════════════════════════════════════════════════════
+
+async function initHandDetector(){
+  loadingText.textContent = "Carregando modelo de detecção de mão…";
+  try {
+    const vision = await window.FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+    handDetector = await window.HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numHands: 1,
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+    console.log("Hand detector ready");
+  } catch(e){
+    console.error("Hand detector init error:", e);
+    loadingText.textContent = "Erro ao carregar modelo. Recarregue a página.";
+    throw e;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  CAMERA SETUP
+// ═══════════════════════════════════════════════════════════
+
+async function startCamera(){
+  loadingText.textContent = "Solicitando acesso à câmera…";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {facingMode:"environment", width:{ideal:640}, height:{ideal:480}},
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    cameraRunning = true;
+    console.log("Camera started:", video.videoWidth, "x", video.videoHeight);
+  } catch(e){
+    console.error("Camera error:", e);
+    loadingText.textContent = "Erro na câmera. Verifique as permissões.";
+    throw e;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  HAND LANDMARK PROCESSING
+// ═══════════════════════════════════════════════════════════
+
+function processHandLandmarks(){
+  if(!handDetector || !cameraRunning || video.readyState < 2) return;
+  try {
+    const results = handDetector.detectForVideo(video, performance.now());
+    if(results.landmarks && results.landmarks.length > 0){
+      handLandmarks = results.landmarks[0];
+      updateHandVisualization();
+      updatePinchDetection();
+      hudHand.textContent = "✋ Mão detectada";
+      hudHand.style.color = "#00e5ff";
+    } else {
+      handLandmarks = null;
+      hideHandVisualization();
+      hudHand.textContent = "✋ Sem mão";
+      hudHand.style.color = "#ff5252";
+      hudPinch.textContent = "🤏 --";
+      if(isDragging) isDragging = false;
+    }
+  } catch(e){ /* silently handle */ }
+}
+
+// ── Map normalized coords to 3D world ─────────────────────
+function landmarkTo3D(lm){
+  return new THREE.Vector3(
+    (0.5 - lm.x) * 4.0,
+    (1.0 - lm.y) * 3.0 + 0.3,
+    -lm.z * 3.0 - 1.0
+  );
+}
+
+function updateHandVisualization(){
+  if(!handLandmarks) return;
+  const now = performance.now();
+
+  for(let i = 0; i < 21; i++){
+    const pos = landmarkTo3D(handLandmarks[i]);
+    handSpheres[i].position.copy(pos);
+    handSpheres[i].visible = true;
+    if(i === 4 || i === 8){
+      handSpheres[i].scale.setScalar(1.0 + 0.2 * Math.sin(now * 0.005));
+    }
+  }
+
+  HAND_CONNECTIONS.forEach(([a, b], idx) => {
+    positionCylinder(handCylinders[idx], landmarkTo3D(handLandmarks[a]), landmarkTo3D(handLandmarks[b]));
+    handCylinders[idx].visible = true;
+  });
+
+  const indexTip = landmarkTo3D(handLandmarks[8]);
+  cursorSphere.position.copy(indexTip);
+  cursorSphere.visible = true;
+
+  // Laser from index tip toward window center
+  const winCenter = windowGroup.position.clone();
+  const laserLen = indexTip.distanceTo(winCenter);
+  _dir.subVectors(winCenter, indexTip);
+  _mid.addVectors(indexTip, winCenter).multiplyScalar(0.5);
+  laserMesh.position.copy(_mid);
+  laserMesh.scale.set(1, laserLen, 1);
+  _quat.setFromUnitVectors(_up, _dir.normalize());
+  laserMesh.quaternion.copy(_quat);
+  laserMesh.visible = true;
+
+  // Hit indicator on window surface
+  const hitPoint = indexTip.clone().add(_dir.clone().multiplyScalar(laserLen));
+  hitMesh.position.copy(hitPoint);
+  hitMesh.lookAt(indexTip);
+  hitMesh.visible = true;
+  hitMesh.scale.setScalar(1.0 + 0.3 * Math.sin(now * 0.008));
+}
+
+function hideHandVisualization(){
+  handSpheres.forEach(s => s.visible = false);
+  handCylinders.forEach(c => c.visible = false);
+  cursorSphere.visible = false;
+  laserMesh.visible = false;
+  hitMesh.visible = false;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  PINCH DETECTION & WINDOW DRAGGING
+// ═══════════════════════════════════════════════════════════
+
+function updatePinchDetection(){
+  if(!handLandmarks) return;
+
+  const thumbTip = handLandmarks[4];
+  const indexTip = handLandmarks[8];
+  const dx = thumbTip.x - indexTip.x;
+  const dy = thumbTip.y - indexTip.y;
+  const dz = thumbTip.z - indexTip.z;
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+  hudPinch.textContent = "🤏 " + dist.toFixed(3);
+  const wasPinching = isPinching;
+  isPinching = dist < PINCH_THRESH;
+
+  if(isPinching){
+    hudPinch.style.color = "#ff4081";
+    handSpheres[4].material.emissive.setHex(0xff4081);
+    handSpheres[8].material.emissive.setHex(0xff4081);
+
+    // On first pinch frame, calculate offset
+    if(!isDragging){
+      isDragging = true;
+      const cursorPos = landmarkTo3D(handLandmarks[8]);
+      dragOffset.subVectors(windowGroup.position, cursorPos);
+    }
+
+    // Move window keeping offset
+    const cursorPos = landmarkTo3D(handLandmarks[8]);
+    const target = cursorPos.clone().add(dragOffset);
+    target.z = Math.max(Math.min(target.z, -1), -6);
+    windowGroup.position.lerp(target, 0.2);
+
+  } else {
+    hudPinch.style.color = "#80cbc4";
+    handSpheres[4].material.emissive.setHex(0x7c4dff);
+    handSpheres[8].material.emissive.setHex(0xff4081);
+    if(wasPinching) isDragging = false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  YOUTUBE IFRAME API (background audio)
+// ═══════════════════════════════════════════════════════════
+
+// Hidden YT player div
+const ytDiv = document.createElement("div");
+ytDiv.id = "ytPlayerDiv";
+ytDiv.style.cssText = "position:absolute;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;";
+document.body.appendChild(ytDiv);
+
+function loadYouTubeAPI(){
+  const tag = document.createElement("script");
+  tag.src = "https://www.youtube.com/iframe_api";
+  document.head.appendChild(tag);
+  window.onYouTubeIframeAPIReady = function(){
+    ytPlayer = new YT.Player("ytPlayerDiv", {
+      height:"1", width:"1",
+      videoId: videoIds[0],
+      playerVars:{autoplay:0, controls:0, disablekb:1, fs:0, modestbranding:1},
+      events:{
+        onReady: function(){ ytReady = true; console.log("YT ready"); },
+        onStateChange: function(e){
+          isPlaying = e.data === YT.PlayerState.PLAYING;
+          drawScreen();
+        }
+      }
+    });
+  };
+}
+
+function handleButtonAction(action){
+  if(!ytReady && action !== "stop") return;
+  switch(action){
+    case "play":
+      if(isPlaying) ytPlayer.pauseVideo(); else ytPlayer.playVideo();
+      break;
+    case "stop":
+      if(ytReady) ytPlayer.stopVideo();
+      isPlaying = false; drawScreen();
+      break;
+    case "next":
+      currentVideoIdx = (currentVideoIdx + 1) % videoIds.length;
+      ytPlayer.loadVideoById(videoIds[currentVideoIdx]);
+      break;
+    case "prev":
+      currentVideoIdx = (currentVideoIdx - 1 + videoIds.length) % videoIds.length;
+      ytPlayer.loadVideoById(videoIds[currentVideoIdx]);
+      break;
+  }
+}
+
+function checkButtonHit(){
+  if(!handLandmarks) return;
+  const localPos = windowGroup.worldToLocal(landmarkTo3D(handLandmarks[8]).clone());
+  const screenW = WINDOW_W - 0.08, screenH = WINDOW_H - 0.3;
+  if(Math.abs(localPos.x) < screenW/2 && Math.abs(localPos.y + 0.06) < screenH/2){
+    const btnLocalY = -WINDOW_H/2 + 0.22;
+    if(Math.abs(localPos.y - btnLocalY) < 0.15){
+      [{a:"prev",x:-1.0},{a:"play",x:-0.4},{a:"stop",x:0.2},{a:"next",x:0.8}].forEach(b => {
+        if(Math.abs(localPos.x - b.x) < 0.3) handleButtonAction(b.a);
+      });
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ANIMATION LOOP
+// ═══════════════════════════════════════════════════════════
+
+function animate(time){
+  requestAnimationFrame(animate);
+  const t = time * 0.001; // seconds
+  const dt = t - prevTime;
+  prevTime = t;
+
+  // FPS
+  fpsFrames++;
+  if(time - fpsTime > 1000){
+    hudFps.textContent = "FPS: " + fpsFrames;
+    fpsFrames = 0; fpsTime = time;
+  }
+
+  processHandLandmarks();
+
+  // Button hit on pinch transition
+  if(isPinching && !lastPinchState){
+    checkButtonHit();
+    lastBtnHitTime = time;
+  }
+  // Repeat while holding pinch (debounced)
+  if(isPinching && time - lastBtnHitTime > 600){
+    checkButtonHit();
+    lastBtnHitTime = time;
+  }
+  lastPinchState = isPinching;
+
+  // Star field
+  starField.rotation.y += 0.0001;
+  starField.rotation.x += 0.00005;
+
+  // Floating particles
+  const pPos = floatingParticles.geometry.attributes.position.array;
+  for(let i = 0; i < pPos.length; i += 3){
+    pPos[i+1] += Math.sin(t * 0.5 + i) * 0.0005;
+    if(pPos[i+1] > 7) pPos[i+1] = 0.5;
+  }
+  floatingParticles.geometry.attributes.position.needsUpdate = true;
+
+  // Window glow
+  glowMat.uniforms.uTime.value = t;
+
+  // Gentle float when not dragging
+  if(!isDragging){
+    windowGroup.position.y = windowHomePos.y + Math.sin(t * 0.8) * 0.05;
+  }
+
+  // Animate lights
+  pointLight1.position.x = Math.sin(t * 0.3) * 4;
+  pointLight1.position.z = Math.cos(t * 0.3) * 3 - 2;
+  pointLight2.position.x = Math.cos(t * 0.4) * 3;
+  pointLight2.position.z = Math.sin(t * 0.4) * 4 - 3;
+
+  // Redraw screen ~4fps
+  if(Math.floor(t * 4) !== Math.floor((t - dt) * 4)) drawScreen();
+
+  // ── Stereoscopic SBS rendering ──────────────────────────
+  const w = window.innerWidth, h = window.innerHeight, halfW = w / 2;
+  renderer.clear();
+  renderer.setScissorTest(true);
+
+  // Left eye
+  renderer.setViewport(0, 0, halfW, h);
+  renderer.setScissor(0, 0, halfW, h);
+  renderer.render(scene, leftCamera);
+
+  // Right eye
+  renderer.setViewport(halfW, 0, halfW, h);
+  renderer.setScissor(halfW, 0, halfW, h);
+  renderer.render(scene, rightCamera);
+
+  renderer.setScissorTest(false);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  RESIZE HANDLER
+// ═══════════════════════════════════════════════════════════
+
+function onResize(){
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  const halfAspect = (w / 2) / h;
+  leftCamera.aspect = halfAspect;
+  leftCamera.updateProjectionMatrix();
+  rightCamera.aspect = halfAspect;
+  rightCamera.updateProjectionMatrix();
+}
+window.addEventListener("resize", onResize);
+
+// ═══════════════════════════════════════════════════════════
+//  INITIALIZATION
+// ═══════════════════════════════════════════════════════════
+
+btnStart.addEventListener("click", async function(){
+  startScreen.style.display = "none";
+  loadingOverlay.classList.add("active");
+  hud.classList.remove("hidden");
+
+  try {
+    loadYouTubeAPI();
+    await initHandDetector();
+    await startCamera();
+    drawScreen();
+    loadingOverlay.classList.remove("active");
+    prevTime = performance.now() * 0.001;
+    requestAnimationFrame(animate);
+    console.log("VR Box started!");
+  } catch(e){
+    console.error("Init error:", e);
+    loadingText.textContent = "Erro: " + e.message + ". Toque para recarregar.";
+    loadingOverlay.style.cursor = "pointer";
+    loadingOverlay.addEventListener("click", () => location.reload());
+  }
+});
+
+// Prevent default touch behaviors
+document.addEventListener("touchmove", e => e.preventDefault(), {passive:false});
+document.addEventListener("gesturestart", e => e.preventDefault());
+document.addEventListener("gesturechange", e => e.preventDefault());
+
+// Initial draw
+drawScreen();
+
+})();
+</script>
+</body>
+</html>
